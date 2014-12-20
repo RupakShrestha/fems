@@ -50,8 +50,9 @@ import org.apache.commons.cli.ParseException;
 import org.json.JSONObject;
 
 import de.fenecon.fems.exceptions.FEMSException;
-import de.fenecon.fems.exceptions.NoInternetException;
-import de.fenecon.fems.exceptions.NoIPException;
+import de.fenecon.fems.exceptions.InternetException;
+import de.fenecon.fems.exceptions.IPException;
+import de.fenecon.fems.exceptions.RS485Exception;
 import de.fenecon.fems.tools.FEMSIO;
 import de.fenecon.fems.tools.FEMSIO.UserLED;
 import de.fenecon.fems.tools.FEMSYaler;
@@ -215,7 +216,6 @@ public class FEMSCore {
 		ModbusResponse res = modbusSerialTransaction.getResponse();
 		
 		if (res instanceof ReadMultipleRegistersResponse) {
-			logInfo("Modbus result: " + (ReadMultipleRegistersResponse)res);
 			return true;
     	} else if (res instanceof ExceptionResponse) {
     		logError("Modbus error: " + ((ExceptionResponse)res).getExceptionCode());
@@ -317,15 +317,14 @@ public class FEMSCore {
 	 */
 	private static void init() {
 		logInfo("Start FEMS Initialization");
-		boolean returnWithError = false;
+		int returnCode = 0; 
 		FEMSIO femsIO = FEMSIO.getFEMSIO();
-		FEMSLcdAgent lcdAgent = FEMSLcdAgent.getFEMSLcdAgent();
-		lcdAgent.start();
+		FEMSDisplayAgent displayAgent = FEMSDisplayAgent.getFEMSLcdAgent();
 		Runtime rt = Runtime.getRuntime();
 		Process proc;
 	
 		// init LCD display
-		lcdAgent.setFirstRow("FEMS Selbsttest");
+		displayAgent.setFirstRow("FEMS Selbsttest");
 				 
 		// check if dpkg is running during startup of initialization
 		boolean dpkgIsRunning = isDpkgRunning();
@@ -360,15 +359,15 @@ public class FEMSCore {
 					proc.waitFor();
 					ip = getIPaddress(); /* try again */
 					if(ip == null) { /* still no IP */
-						throw new NoIPException();
+						throw new IPException();
 					}
 				} catch (IOException | InterruptedException e) {
-					throw new NoIPException(e.getMessage());
+					throw new IPException(e.getMessage());
 				}
 			}
 			logInfo("IP: " + ip.getHostAddress());
-			lcdAgent.status.setIp(true);
-			lcdAgent.offer("IP ok");
+			displayAgent.status.setIp(true);
+			displayAgent.offer("IP ok");
 			try { femsIO.switchUserLED(UserLED.LED1, true); } catch (IOException e) { logError(e.getMessage()); }		
 	
 			// check time
@@ -380,7 +379,7 @@ public class FEMSCore {
 					con.setConnectTimeout(1000);
 					con.getContent();
 				} catch (IOException e) {
-					throw new NoInternetException(e.getMessage());
+					throw new InternetException(e.getMessage());
 				}	
 			} else {
 				logInfo("Date was not ok: " + dateFormat.format(new Date()));
@@ -388,28 +387,26 @@ public class FEMSCore {
 					proc = rt.exec("/usr/sbin/ntpdate -b -u fenecon.de 0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org 3.pool.ntp.org");
 					proc.waitFor();
 					if(!isDateValid()) {
-						throw new NoInternetException("Date is still wrong: " + dateFormat.format(new Date()));
+						throw new InternetException("Date is still wrong: " + dateFormat.format(new Date()));
 					}
 					logInfo("Date is now ok: " + dateFormat.format(new Date()));
 				} catch (IOException | InterruptedException e) {
-					throw new NoInternetException(e.getMessage());
+					throw new InternetException(e.getMessage());
 				}
 			}
 			logInfo("Internet access is available");
-			lcdAgent.status.setInternet(true);
-			lcdAgent.offer("Internet ok");
+			displayAgent.status.setInternet(true);
+			displayAgent.offer("Internet ok");
 			try { femsIO.switchUserLED(UserLED.LED2, true); } catch (IOException e) { logError(e.getMessage()); }	
 					
 			// test modbus
-			if(isModbusWorking()) {
-				logInfo("Modbus is ok");
-				lcdAgent.status.setModbus(true);
-				lcdAgent.offer("RS485 ok");
-			} else {
-				logError("Modbus is not ok");
-				lcdAgent.offer("RS485-Fehler");
+			if(!isModbusWorking()) {
+				throw new RS485Exception();
 			}
-		
+			logInfo("Modbus is ok");
+			displayAgent.status.setModbus(true);
+			displayAgent.offer("RS485 ok");
+			
 			// announce systemd finished
 			logInfo("Announce systemd: ready");
 			try {
@@ -420,11 +417,9 @@ public class FEMSCore {
 			}
 		} catch (FEMSException e) {
 			logError(e.getMessage());
-			lcdAgent.offer(e.getMessage());
-			returnWithError = true;
+			displayAgent.offer(e.getMessage());
+			returnCode = 1;
 		}
-		lcdAgent.stopAgent();
-		try { lcdAgent.join(); } catch (InterruptedException e) { ; }
 		
 		// Send message
 		if(apikey == null) {
@@ -439,7 +434,7 @@ public class FEMSCore {
 			}
 		}
 		
-		if(lcdAgent.status.getInternet() && !dpkgIsRunning) {
+		if(displayAgent.status.getInternet() && !dpkgIsRunning) {
 			// start update
 			logInfo("Start system update");
 			try {
@@ -452,13 +447,20 @@ public class FEMSCore {
 			logInfo("Do not start system update");
 		}
 		
-		// Exit
-		if(returnWithError) {
-			logError("Finished with error");
-			System.exit(1);
-		} else {
+
+		// Exit message
+		if(returnCode == 0) {
 			logInfo("Finished without error");
-			System.exit(0);
+			displayAgent.offer(" erfolgreich");
+		} else {
+			logError("Finished with error");
 		}
+		
+		// stop lcdAgent
+		displayAgent.stopAgent();
+		try { displayAgent.join(); } catch (InterruptedException e) { ; }
+		
+		// Exit
+		System.exit(returnCode);
 	}
 }

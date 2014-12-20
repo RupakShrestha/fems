@@ -9,10 +9,9 @@
 package de.fenecon.fems;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
-
 import de.fenecon.fems.tools.FEMSIO;
 
-public class FEMSLcdAgent extends Thread {
+public class FEMSDisplayAgent extends Thread {
 	public class Status {
 		private boolean changed = false; 
 		private boolean ip = false;
@@ -43,14 +42,14 @@ public class FEMSLcdAgent extends Thread {
 	}
 	
 	private static ConcurrentLinkedQueue<String> queue = new ConcurrentLinkedQueue<String>();
-    private static FEMSLcdAgent femsLcdAgent = null;
+    private static FEMSDisplayAgent femsDisplayAgent = null;
     
-    public static FEMSLcdAgent getFEMSLcdAgent() {
-    	if(femsLcdAgent != null) {
-    		return femsLcdAgent;
-    	} else {
-    		return new FEMSLcdAgent();
+    public static FEMSDisplayAgent getFEMSLcdAgent() {
+    	if(femsDisplayAgent == null) {
+    		femsDisplayAgent = new FEMSDisplayAgent();	
+    		femsDisplayAgent.start();
     	}
+    	return femsDisplayAgent;
     }
     
     private volatile boolean stop = false; 
@@ -70,19 +69,21 @@ public class FEMSLcdAgent extends Thread {
 		FEMSIO femsIO = FEMSIO.getFEMSIO();
 		String text = "";
 		String nextText = null;
-		while(nextText != null || !stop) {
-			if(nextText != null) text = nextText;
-			for(int i=0; i<10; i++) {
-				if(nextText != null || status.changed) {
-					femsIO.writeAt(0, 0, String.format("%-16s", firstRow));
-					femsIO.writeAt(1, 0, String.format("%-3s %-11s", status, text));
+		try {
+			while(nextText != null || !stop) {
+				if(nextText != null) text = nextText;
+				for(int i=0; i<10; i++) {
+					if(nextText != null || status.changed) {
+						femsIO.writeAt(0, 0, String.format("%-16s", firstRow));
+						femsIO.writeAt(1, 0, String.format("%-3s %-12s", status, text));
+					}
+	
+						Thread.sleep(100);
 				}
-				try {
-					Thread.sleep(100);
-				} catch (InterruptedException e) { ; }
+				nextText = queue.poll();
 			}
-			nextText = queue.poll();
-		}
+		} catch (InterruptedException e) { ; }
+		FEMSDisplayAgent.femsDisplayAgent = null;
 	}
 	
 	public void offer(String text) {

@@ -34,11 +34,10 @@ public class FEMSIO {
     private static FEMSIO femsIO = null;
       
     public static FEMSIO getFEMSIO() {
-    	if(femsIO != null) {
-    		return femsIO;
-    	} else {
-    		return new FEMSIO();
+    	if(femsIO == null) {
+    		femsIO = new FEMSIO();
     	}
+    	return femsIO;
     }
    
     private Lcd lcd = null;

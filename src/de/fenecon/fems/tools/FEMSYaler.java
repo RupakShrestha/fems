@@ -28,11 +28,10 @@ public class FEMSYaler {
 	private static Lock systemctlLock = new ReentrantLock();
     
 	public static FEMSYaler getFEMSYaler() {
-    	if(femsYaler != null) {
-    		return femsYaler;
-    	} else {
-    		return new FEMSYaler();
+    	if(femsYaler == null) {
+    		femsYaler = new FEMSYaler(); 
     	}
+    	return femsYaler;
     }
 	
 	public FEMSYaler() {

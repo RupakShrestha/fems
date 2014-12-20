@@ -8,12 +8,12 @@
  */
 package de.fenecon.fems.exceptions;
 
-public class NoInternetException extends FEMSException {
-	private static final long serialVersionUID = 3918350407022744991L;
-	public NoInternetException() {
-		super("No internet connection available");
+public class IPException extends FEMSException {
+	private static final long serialVersionUID = 3974066714557694838L;
+	public IPException() {
+		super("No IP-Address available");
 	}
-	public NoInternetException(String string) {
+	public IPException(String string) {
 		super(string);
 	}
 }
