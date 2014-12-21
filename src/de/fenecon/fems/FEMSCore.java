@@ -59,11 +59,27 @@ import de.fenecon.fems.tools.FEMSYaler;
 
 public class FEMSCore {
 	private final static SimpleDateFormat dateFormat = new SimpleDateFormat("dd.MM.yyyy");
-	private final static int modbusUnitID = 4;
-	private final static int dessModbusSOCAddress = 10143;
-	private final static String modbusInterface = "/dev/ttyUSB0";
+	
+	private static String femsmonitorUrl;
+	private static String apikey;
+	private static String ess;
 	
 	public static void main(String[] args) {
+		// read FEMS properties from /etc/fems
+		Properties properties = new Properties();
+		BufferedInputStream stream = null;
+		try {
+			stream = new BufferedInputStream(new FileInputStream("/etc/fems"));
+			properties.load(stream);
+			if(stream != null) stream.close();
+		} catch (IOException e) {
+			logError(e.getMessage());
+		}
+		femsmonitorUrl = properties.getProperty("url", "https://fenecon.de/femsmonitor");
+		apikey = properties.getProperty("apikey");
+		ess = properties.getProperty("ess", "dess");
+		
+		// handle commandline parameters		
 		Options options = new Options();
 		options.addOption("h", "help", false, "");
 		options.addOption(null, "init", false, "Initialize system");
@@ -181,12 +197,23 @@ public class FEMSCore {
 	
 	/**
 	 * Checks if modbus connection to storage system is working
+	 * @param ess "dess" or "cess"
 	 * @return
 	 */
-	private static boolean isModbusWorking() {
+	private static boolean isModbusWorking(String ess) {
+		String portName = "/dev/ttyUSB0";
+		// default: DESS 
+		int baudRate = 9600;
+		int socAddress = 10143;
+		int unit = 4;
+		if(ess.compareTo("cess")==0) {
+			baudRate = 19200;
+			socAddress = 0x1402;
+			unit = 100;
+		}
 		SerialParameters params = new SerialParameters();
-		params.setPortName(modbusInterface);
-		params.setBaudRate(9600);
+		params.setPortName(portName);
+		params.setBaudRate(baudRate);
 		params.setDatabits(8);
 		params.setParity("None");
 		params.setStopbits(1);
@@ -201,8 +228,8 @@ public class FEMSCore {
 			return false;
 		}
 		ModbusSerialTransaction modbusSerialTransaction = null;
-		ReadMultipleRegistersRequest req = new ReadMultipleRegistersRequest(dessModbusSOCAddress, 1);
-		req.setUnitID(modbusUnitID);
+		ReadMultipleRegistersRequest req = new ReadMultipleRegistersRequest(socAddress, 1);
+		req.setUnitID(unit);
 		req.setHeadless();	
 		modbusSerialTransaction = new ModbusSerialTransaction(serialConnection);
 		modbusSerialTransaction.setRequest(req);
@@ -246,7 +273,7 @@ public class FEMSCore {
 	/**
 	 * Send message to Online-Monitoring
 	 */
-	private static JSONObject sendMessage(String urlString, String apikey, String message) {
+	public static JSONObject sendMessage(String message) {
 		// create JSON		
 		JSONObject mainJson = new JSONObject();
 		mainJson.put("version", 1);
@@ -254,11 +281,12 @@ public class FEMSCore {
 		mainJson.put("timestamp", new Date().getTime());
 		mainJson.put("content", "system");
 		mainJson.put("system", message);
-		mainJson.put("ipv4", getIPaddress()); // local ipv4 address
+		mainJson.put("ipv4", getIPaddress().getHostAddress()); // local ipv4 address
+		mainJson.put("yaler", FEMSYaler.getFEMSYaler().isActive());
 		// send to server
 		HttpsURLConnection con;
 		try {
-			URL url = new URL(urlString);
+			URL url = new URL(femsmonitorUrl);
 			con = (HttpsURLConnection)url.openConnection();
 			con.setRequestMethod("POST");
 			con.setRequestProperty("Content-Type","application/json"); 
@@ -333,18 +361,6 @@ public class FEMSCore {
 		} else {
 			logInfo("DPKG is not running -> will start system update");
 		}
-		
-		// read FEMS properties from /etc/fems
-		Properties properties = new Properties();
-		BufferedInputStream stream = null;
-		try {
-			stream = new BufferedInputStream(new FileInputStream("/etc/fems"));
-			properties.load(stream);
-			if(stream != null) stream.close();
-		} catch (IOException e) {
-			logError(e.getMessage());
-		}
-		String apikey = properties.getProperty("apikey");
 
 		// turn outputs off
 		logInfo("Turn outputs off");
@@ -400,7 +416,7 @@ public class FEMSCore {
 			try { femsIO.switchUserLED(UserLED.LED2, true); } catch (IOException e) { logError(e.getMessage()); }	
 					
 			// test modbus
-			if(!isModbusWorking()) {
+			if(!isModbusWorking(ess)) {
 				throw new RS485Exception();
 			}
 			logInfo("Modbus is ok");
@@ -421,11 +437,18 @@ public class FEMSCore {
 			returnCode = 1;
 		}
 		
+		// Check if Yaler is active
+		if(FEMSYaler.getFEMSYaler().isActive()) {
+			logInfo("Yaler is activated");
+		} else {
+			logInfo("Yaler is deactivated");
+		}
+		
 		// Send message
 		if(apikey == null) {
 			logError("Apikey is not available");
 		} else {		
-			JSONObject returnJson = sendMessage("https://fenecon.de/femsmonitor", apikey, logText);
+			JSONObject returnJson = sendMessage(logText);
 			try {
 				// start yaler if necessary
 				handleReturnJson(returnJson);

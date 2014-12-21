@@ -17,6 +17,8 @@ import java.nio.file.Paths;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import de.fenecon.fems.FEMSCore;
+
 public class FEMSYaler {
 	private static final String serviceFileName = "fems-yalertunnel.service";
 	private static final Path serviceFile = Paths.get("/lib/systemd/system/", serviceFileName);
@@ -44,12 +46,7 @@ public class FEMSYaler {
 			if(proc.waitFor() == 0) {
 				serviceIsActive = true;
 			} else {
-				proc = rt.exec(systemctlExecutable + " is-enabled " + serviceFileName + " --quiet");
-				if(proc.waitFor() == 0) {
-					serviceIsActive = true;
-				} else {
-					serviceIsActive = false;
-				}
+				serviceIsActive = false;
 			}
 		} catch (InterruptedException | IOException e) {
 			System.out.println("Status of yaler service is unknown: " + e.getMessage());
@@ -58,6 +55,10 @@ public class FEMSYaler {
 		}
         System.out.println("Yaler service status is " + (serviceIsActive ? "online" : "offline"));	
     }
+	
+	public boolean isActive() {
+		return serviceIsActive;
+	}
 	
 	public void activateTunnel(String relayDomain) throws Exception {
 		/* do nothing if service is active */
@@ -111,6 +112,7 @@ public class FEMSYaler {
         } 
         /* set as active */
         serviceIsActive = true;
+        FEMSCore.sendMessage("Yalertunnel is now activated");
 	}
 	
 	public void deactivateTunnel() throws IOException, InterruptedException {
@@ -144,5 +146,6 @@ public class FEMSYaler {
 		}
 		/* set as inactive */
 		serviceIsActive = false;
+		FEMSCore.sendMessage("Yalertunnel is now deactivated");
 	}
 }
