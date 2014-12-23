@@ -62,7 +62,7 @@ import de.fenecon.fems.tools.FEMSYaler;
 
 public class FEMSCore {
 	private final static SimpleDateFormat dateFormat = new SimpleDateFormat("dd.MM.yyyy");
-	private final static long minimumInitSecs = 300;
+	private final static long minimumInitSecs = 180;
 	
 	private static String femsmonitorUrl;
 	private static String apikey;
@@ -205,6 +205,13 @@ public class FEMSCore {
 	 * @return
 	 */
 	private static boolean isModbusWorking(String ess) {
+		// remove old lock file
+		try {
+			Files.deleteIfExists(Paths.get("/var/lock/LCK..ttyUSB0"));
+		} catch (IOException e1) {
+			e1.printStackTrace();
+		}
+		
 		String portName = "/dev/ttyUSB0";
 		// default: DESS 
 		int baudRate = 9600;
@@ -229,6 +236,7 @@ public class FEMSCore {
 			serialConnection.open();
 		} catch (Exception e) {
 			logError("Modbus connection error");
+			serialConnection.close();
 			return false;
 		}
 		ModbusSerialTransaction modbusSerialTransaction = null;
@@ -242,9 +250,11 @@ public class FEMSCore {
 			modbusSerialTransaction.execute();
 		} catch (ModbusException e) {
 			logError("Modbus execution error");
+			serialConnection.close();
 			return false;
 		}
 		ModbusResponse res = modbusSerialTransaction.getResponse();
+		serialConnection.close();
 		
 		if (res instanceof ReadMultipleRegistersResponse) {
 			return true;
