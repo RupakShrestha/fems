@@ -15,6 +15,8 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -28,6 +30,7 @@ import java.util.Calendar;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -59,6 +62,7 @@ import de.fenecon.fems.tools.FEMSYaler;
 
 public class FEMSCore {
 	private final static SimpleDateFormat dateFormat = new SimpleDateFormat("dd.MM.yyyy");
+	private final static long minimumInitSecs = 300;
 	
 	private static String femsmonitorUrl;
 	private static String apikey;
@@ -344,145 +348,187 @@ public class FEMSCore {
 	 * Initialize FEMS/FEMSmonitor system
 	 */
 	private static void init() {
-		logInfo("Start FEMS Initialization");
+		Date startInitTimestamp = new Date();
 		int returnCode = 0; 
-		FEMSIO femsIO = FEMSIO.getFEMSIO();
-		FEMSDisplayAgent displayAgent = FEMSDisplayAgent.getFEMSLcdAgent();
-		Runtime rt = Runtime.getRuntime();
-		Process proc;
-	
-		// init LCD display
-		displayAgent.setFirstRow("FEMS Selbsttest");
-				 
-		// check if dpkg is running during startup of initialization
-		boolean dpkgIsRunning = isDpkgRunning();
-		if(dpkgIsRunning) {
-			logInfo("DPKG is running -> no system update");
-		} else {
-			logInfo("DPKG is not running -> will start system update");
-		}
-
-		// turn outputs off
-		logInfo("Turn outputs off");
-		turnAllOutputsOff(femsIO);
-		
+		boolean dpkgIsRunning = false;
 		try {
-			// check for valid ip address
-			InetAddress ip = getIPaddress();
-			if(ip == null) {
-		        try {
-					proc = rt.exec("/sbin/dhclient eth0");
-					proc.waitFor();
-					ip = getIPaddress(); /* try again */
-					if(ip == null) { /* still no IP */
-						throw new IPException();
-					}
-				} catch (IOException | InterruptedException e) {
-					throw new IPException(e.getMessage());
-				}
-			}
-			logInfo("IP: " + ip.getHostAddress());
-			displayAgent.status.setIp(true);
-			displayAgent.offer("IP ok");
-			try { femsIO.switchUserLED(UserLED.LED1, true); } catch (IOException e) { logError(e.getMessage()); }		
-	
-			// check time
-			if(isDateValid()) { /* date is valid, so we check internet access only */
-				logInfo("Date was ok: " + dateFormat.format(new Date()));
-				try {
-					URL url = new URL("https://fenecon.de");
-					URLConnection con = url.openConnection();
-					con.setConnectTimeout(1000);
-					con.getContent();
-				} catch (IOException e) {
-					throw new InternetException(e.getMessage());
-				}	
+			logInfo("Start FEMS Initialization");
+	 
+			// check if dpkg is running during startup of initialization
+			dpkgIsRunning = isDpkgRunning();
+			if(dpkgIsRunning) {
+				logInfo("DPKG is running -> no system update");
 			} else {
-				logInfo("Date was not ok: " + dateFormat.format(new Date()));
-				try {
-					proc = rt.exec("/usr/sbin/ntpdate -b -u fenecon.de 0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org 3.pool.ntp.org");
-					proc.waitFor();
-					if(!isDateValid()) {
-						throw new InternetException("Date is still wrong: " + dateFormat.format(new Date()));
+				logInfo("DPKG is not running -> will start system update");
+			}
+			
+			// init LCD display
+			Runtime rt = Runtime.getRuntime();
+			Process proc;
+			FEMSIO femsIO = FEMSIO.getFEMSIO();
+			FEMSDisplayAgent displayAgent = FEMSDisplayAgent.getFEMSLcdAgent();
+			displayAgent.setFirstRow("FEMS Selbsttest");
+			
+			// turn outputs off
+			logInfo("Turn outputs off");
+			turnAllOutputsOff(femsIO);
+			
+			try {
+				// check for valid ip address
+				InetAddress ip = getIPaddress();
+				if(ip == null) {
+			        try {
+						proc = rt.exec("/sbin/dhclient eth0");
+						proc.waitFor();
+						ip = getIPaddress(); /* try again */
+						if(ip == null) { /* still no IP */
+							throw new IPException();
+						}
+					} catch (IOException | InterruptedException e) {
+						throw new IPException(e.getMessage());
 					}
-					logInfo("Date is now ok: " + dateFormat.format(new Date()));
+				}
+				logInfo("IP: " + ip.getHostAddress());
+				displayAgent.status.setIp(true);
+				displayAgent.offer("IP ok");
+				try { femsIO.switchUserLED(UserLED.LED1, true); } catch (IOException e) { logError(e.getMessage()); }		
+		
+				// check time
+				if(isDateValid()) { /* date is valid, so we check internet access only */
+					logInfo("Date was ok: " + dateFormat.format(new Date()));
+					try {
+						URL url = new URL("https://fenecon.de");
+						URLConnection con = url.openConnection();
+						con.setConnectTimeout(1000);
+						con.getContent();
+					} catch (IOException e) {
+						throw new InternetException(e.getMessage());
+					}	
+				} else {
+					logInfo("Date was not ok: " + dateFormat.format(new Date()));
+					try {
+						proc = rt.exec("/usr/sbin/ntpdate -b -u fenecon.de 0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org 3.pool.ntp.org");
+						proc.waitFor();
+						if(!isDateValid()) {
+							throw new InternetException("Date is still wrong: " + dateFormat.format(new Date()));
+						}
+						logInfo("Date is now ok: " + dateFormat.format(new Date()));
+					} catch (IOException | InterruptedException e) {
+						throw new InternetException(e.getMessage());
+					}
+				}
+				logInfo("Internet access is available");
+				displayAgent.status.setInternet(true);
+				displayAgent.offer("Internet ok");
+				try { femsIO.switchUserLED(UserLED.LED2, true); } catch (IOException e) { logError(e.getMessage()); }	
+						
+				// test modbus
+				if(!isModbusWorking(ess)) {
+					throw new RS485Exception();
+				}
+				logInfo("Modbus is ok");
+				displayAgent.status.setModbus(true);
+				displayAgent.offer("RS485 ok");
+				
+				// announce systemd finished
+				logInfo("Announce systemd: ready");
+				try {
+					proc = rt.exec("/bin/systemd-notify --ready");
+					proc.waitFor();
 				} catch (IOException | InterruptedException e) {
-					throw new InternetException(e.getMessage());
+					logError(e.getMessage());
+				}
+			} catch (FEMSException e) {
+				logError(e.getMessage());
+				displayAgent.offer(e.getMessage());
+				returnCode = 1;
+			}
+			
+			// Check if Yaler is active
+			if(FEMSYaler.getFEMSYaler().isActive()) {
+				logInfo("Yaler is activated");
+			} else {
+				logInfo("Yaler is deactivated");
+			}
+			
+			// Send message
+			if(apikey == null) {
+				logError("Apikey is not available");
+			} else {		
+				JSONObject returnJson = sendMessage(logText);
+				try {
+					// start yaler if necessary
+					handleReturnJson(returnJson);
+				} catch (Exception e) {
+					logError(e.getMessage());
 				}
 			}
-			logInfo("Internet access is available");
-			displayAgent.status.setInternet(true);
-			displayAgent.offer("Internet ok");
-			try { femsIO.switchUserLED(UserLED.LED2, true); } catch (IOException e) { logError(e.getMessage()); }	
-					
-			// test modbus
-			if(!isModbusWorking(ess)) {
-				throw new RS485Exception();
-			}
-			logInfo("Modbus is ok");
-			displayAgent.status.setModbus(true);
-			displayAgent.offer("RS485 ok");
 			
-			// announce systemd finished
-			logInfo("Announce systemd: ready");
-			try {
-				proc = rt.exec("/bin/systemd-notify --ready");
-				proc.waitFor();
-			} catch (IOException | InterruptedException e) {
-				logError(e.getMessage());
+			if(displayAgent.status.getInternet() && !dpkgIsRunning) {
+				// start update
+				logInfo("Start system update");
+				try {
+					proc = rt.exec("/etc/cron.daily/fems-autoupdate");
+					proc.waitFor();
+				} catch (IOException | InterruptedException e) {
+					logError(e.getMessage());
+				}
+			} else {
+				logInfo("Do not start system update");
 			}
-		} catch (FEMSException e) {
-			logError(e.getMessage());
-			displayAgent.offer(e.getMessage());
-			returnCode = 1;
-		}
-		
-		// Check if Yaler is active
-		if(FEMSYaler.getFEMSYaler().isActive()) {
-			logInfo("Yaler is activated");
-		} else {
-			logInfo("Yaler is deactivated");
-		}
-		
-		// Send message
-		if(apikey == null) {
-			logError("Apikey is not available");
-		} else {		
-			JSONObject returnJson = sendMessage(logText);
+			
+			// Exit message
+			if(returnCode == 0) {
+				logInfo("Finished without error");
+				displayAgent.offer(" erfolgreich");
+			} else {
+				logError("Finished with error");
+			}
+			
+			// stop lcdAgent
+			displayAgent.stopAgent();
+			try { displayAgent.join(); } catch (InterruptedException e) { ; }
+			
+			// wait if we are to early and dpkg is not running
+			long initTime = new Date().getTime() - startInitTimestamp.getTime();
+			if(!dpkgIsRunning && TimeUnit.MILLISECONDS.toSeconds(initTime) < minimumInitSecs) {
+				logInfo("Too fast (" + TimeUnit.MILLISECONDS.toSeconds(initTime) + " secs) ... waiting");
+				Thread.sleep(TimeUnit.SECONDS.toMillis(minimumInitSecs) - initTime);
+			}
+			
+		} catch (Throwable e) { // Catch everything else
+			returnCode = 2;
+			StringWriter sw = new StringWriter();
+			e.printStackTrace(new PrintWriter(sw));
+			logError("Critical error: " + sw.toString());
+			e.printStackTrace();
+			JSONObject returnJson = sendMessage(logText); // try to send log
 			try {
 				// start yaler if necessary
 				handleReturnJson(returnJson);
-			} catch (Exception e) {
-				logError(e.getMessage());
+			} catch (Exception e1) {
+				logError(e1.getMessage());
+			}
+			// wait if we are to early
+			long initTime = new Date().getTime() - startInitTimestamp.getTime();
+			if(!dpkgIsRunning && TimeUnit.MILLISECONDS.toSeconds(initTime) < minimumInitSecs) {
+				logInfo("Too fast (" + TimeUnit.MILLISECONDS.toSeconds(initTime) + " secs) ... waiting");
+				try {
+					Thread.sleep(TimeUnit.SECONDS.toMillis(minimumInitSecs) - initTime);
+				} catch (InterruptedException e1) {
+					e1.printStackTrace(new PrintWriter(sw));
+					logError("Sleep error: " + sw.toString());
+					e1.printStackTrace();
+					returnJson = sendMessage(logText); // try to send log
+					try {
+						// start yaler if necessary
+						handleReturnJson(returnJson);
+					} catch (Exception e2) {
+						logError(e2.getMessage());
+					}
+				}
 			}
 		}
-		
-		if(displayAgent.status.getInternet() && !dpkgIsRunning) {
-			// start update
-			logInfo("Start system update");
-			try {
-				proc = rt.exec("/etc/cron.daily/fems-autoupdate");
-				proc.waitFor();
-			} catch (IOException | InterruptedException e) {
-				logError(e.getMessage());
-			}
-		} else {
-			logInfo("Do not start system update");
-		}
-		
-
-		// Exit message
-		if(returnCode == 0) {
-			logInfo("Finished without error");
-			displayAgent.offer(" erfolgreich");
-		} else {
-			logError("Finished with error");
-		}
-		
-		// stop lcdAgent
-		displayAgent.stopAgent();
-		try { displayAgent.join(); } catch (InterruptedException e) { ; }
-		
 		// Exit
 		System.exit(returnCode);
 	}
