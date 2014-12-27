@@ -352,7 +352,7 @@ public class FEMSCore {
     		logInfo("Deactivate Yaler tunnel");
     		FEMSYaler.getFEMSYaler().deactivateTunnel();
     	}
-	}
+	} 
 	
 	/**
 	 * Initialize FEMS/FEMSmonitor system
@@ -440,6 +440,10 @@ public class FEMSCore {
 				displayAgent.status.setModbus(true);
 				displayAgent.offer("RS485 ok");
 				
+				// Exit message
+				logInfo("Finished without error");
+				displayAgent.offer(" erfolgreich");
+				
 				// announce systemd finished
 				logInfo("Announce systemd: ready");
 				try {
@@ -450,9 +454,14 @@ public class FEMSCore {
 				}
 			} catch (FEMSException e) {
 				logError(e.getMessage());
+				logError("Finished with error");
 				displayAgent.offer(e.getMessage());
 				returnCode = 1;
 			}
+			
+			// stop lcdAgent
+			displayAgent.stopAgent();
+			try { displayAgent.join(); } catch (InterruptedException e) { ; }
 			
 			// Check if Yaler is active
 			if(FEMSYaler.getFEMSYaler().isActive()) {
@@ -475,7 +484,7 @@ public class FEMSCore {
 			}
 			
 			if(displayAgent.status.getInternet() && !dpkgIsRunning) {
-				// start update
+				// start update if internet is available and dpkg is not running
 				logInfo("Start system update");
 				try {
 					proc = rt.exec("/etc/cron.daily/fems-autoupdate");
@@ -486,18 +495,6 @@ public class FEMSCore {
 			} else {
 				logInfo("Do not start system update");
 			}
-			
-			// Exit message
-			if(returnCode == 0) {
-				logInfo("Finished without error");
-				displayAgent.offer(" erfolgreich");
-			} else {
-				logError("Finished with error");
-			}
-			
-			// stop lcdAgent
-			displayAgent.stopAgent();
-			try { displayAgent.join(); } catch (InterruptedException e) { ; }
 			
 			// wait if we are to early and dpkg is not running
 			long initTime = new Date().getTime() - startInitTimestamp.getTime();
