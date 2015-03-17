@@ -114,7 +114,7 @@ public class FEMSIO {
     public static void setAnalogOutput(Pwm AnalogOutput, double duty) {
     	AnalogOutput.setFrequency(FREQUENCY);
     	AnalogOutput.setDuty(duty);
-    	AnalogOutput.enable();		
+    	AnalogOutput.enable();
 	};
 	
 	public void writeAt(int row, int column, String text) {

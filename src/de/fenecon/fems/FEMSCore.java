@@ -50,6 +50,7 @@ import org.apache.commons.cli.GnuParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.bulldog.core.gpio.Pwm;
 import org.json.JSONObject;
 
 import de.fenecon.fems.exceptions.FEMSException;
@@ -67,6 +68,7 @@ public class FEMSCore {
 	private static String femsmonitorUrl;
 	private static String apikey;
 	private static String ess;
+	private static boolean debug;
 	
 	public static void main(String[] args) {
 		// read FEMS properties from /etc/fems
@@ -82,11 +84,13 @@ public class FEMSCore {
 		femsmonitorUrl = properties.getProperty("url", "https://fenecon.de/femsmonitor");
 		apikey = properties.getProperty("apikey");
 		ess = properties.getProperty("ess", "dess");
+		debug = Boolean.parseBoolean(properties.getProperty("debug", "false"));
 		
 		// handle commandline parameters		
 		Options options = new Options();
 		options.addOption("h", "help", false, "");
 		options.addOption(null, "init", false, "Initialize system");
+		options.addOption(null, "aout", true, "Set Analog Output: ID,%");
 		
 		CommandLineParser parser = new GnuParser();
 		CommandLine cmd;
@@ -95,6 +99,8 @@ public class FEMSCore {
 			
 			if(cmd.hasOption("init")) {
 				init();
+			} else if(cmd.hasOption("aout")) {
+				setAnalogOutput(cmd.getOptionValue("aout"));
 		    } else {
 		    	help(options);
 			}
@@ -433,12 +439,17 @@ public class FEMSCore {
 				try { femsIO.switchUserLED(UserLED.LED2, true); } catch (IOException e) { logError(e.getMessage()); }	
 						
 				// test modbus
-				if(!isModbusWorking(ess)) {
-					throw new RS485Exception();
+				if(isModbusWorking(ess)) {
+					logInfo("Modbus is ok");
+					displayAgent.status.setModbus(true);
+					displayAgent.offer("RS485 ok");
+				} else {	
+					if(debug) { // if we are in debug mode: ignore RS485-errors
+						logInfo("Ignore RS485-Error");
+					} else {
+						throw new RS485Exception();
+					}
 				}
-				logInfo("Modbus is ok");
-				displayAgent.status.setModbus(true);
-				displayAgent.offer("RS485 ok");
 				
 				// Exit message
 				logInfo("Finished without error");
@@ -538,5 +549,46 @@ public class FEMSCore {
 		}
 		// Exit
 		System.exit(returnCode);
+	}
+	
+	/** Set Analog Output
+	 */
+	private static void setAnalogOutput(String cmd) {
+		logInfo("Analog Output: " + cmd);
+		String[] cmds = cmd.split(",");
+		FEMSIO femsIO = FEMSIO.getFEMSIO();
+		try {
+			if(cmds.length < 2)	throw new Exception("Missing parameters");
+			// parse ID of analog output
+			int id = Integer.parseInt(cmds[0]);
+			logInfo("No: " + id);
+			Pwm aout;
+			switch(id) {
+			case 1:
+				aout = femsIO.AnalogOutput_1;
+				break;
+			case 2:
+				aout = femsIO.AnalogOutput_2;
+				break;
+			case 3:
+				aout = femsIO.AnalogOutput_3;
+				break;
+			case 4:
+				aout = femsIO.AnalogOutput_4;
+				break;
+			default:
+				throw new Exception("ID must be between 1 and 4");
+			}
+			// parse percent/duty
+			int percent = Integer.parseInt(cmds[1]);
+			double duty = percent/100.;
+			logInfo("Duty: " + duty);
+			// set analog output
+			FEMSIO.setAnalogOutput(aout, duty);
+			// set divider to VOLTAGE (0..10 V)
+			femsIO.AnalogOutput_1_divider.high();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 	}
 }
