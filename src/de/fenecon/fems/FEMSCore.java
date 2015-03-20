@@ -23,7 +23,10 @@ import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
@@ -50,7 +53,10 @@ import org.apache.commons.cli.GnuParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.bulldog.beagleboneblack.BBBNames;
 import org.bulldog.core.gpio.Pwm;
+import org.bulldog.core.platform.Board;
+import org.bulldog.core.platform.Platform;
 import org.json.JSONObject;
 
 import de.fenecon.fems.exceptions.FEMSException;
@@ -91,6 +97,8 @@ public class FEMSCore {
 		options.addOption("h", "help", false, "");
 		options.addOption(null, "init", false, "Initialize system");
 		options.addOption(null, "aout", true, "Set Analog Output: ID,%");
+		options.addOption(null, "lcd-text", true, "Set LCD-Text");
+		options.addOption(null, "lcd-backlight", true, "Set LCD-Backlight in %");
 		
 		CommandLineParser parser = new GnuParser();
 		CommandLine cmd;
@@ -101,6 +109,10 @@ public class FEMSCore {
 				init();
 			} else if(cmd.hasOption("aout")) {
 				setAnalogOutput(cmd.getOptionValue("aout"));
+			} else if(cmd.hasOption("lcd-text")) {
+				setLcdText(cmd.getOptionValue("lcd-text"));
+			} else if(cmd.hasOption("lcd-backlight")) {
+				setLcdBrightness(Integer.parseInt(cmd.getOptionValue("lcd-backlight")));
 		    } else {
 		    	help(options);
 			}
@@ -141,6 +153,7 @@ public class FEMSCore {
 	 * "aptitude full-upgrade" session
 	 * @return
 	 */
+	//TODO: this check is now happening also in the fems-autoupdate bash script, so it could be removed here
 	private static boolean isDpkgRunning() {
 		if(Files.exists(Paths.get("/var/lib/dpkg/lock"))) {
 			Runtime rt = Runtime.getRuntime();
@@ -213,12 +226,29 @@ public class FEMSCore {
 	private static boolean isModbusWorking(String ess) {
 		// remove old lock file
 		try {
-			Files.deleteIfExists(Paths.get("/var/lock/LCK..ttyUSB0"));
-		} catch (IOException e1) {
-			e1.printStackTrace();
+			if(Files.deleteIfExists(Paths.get("/var/lock/LCK..ttyUSB0"))) {
+				logInfo("Deleted old lock file");
+			}
+		} catch (IOException e) {
+			logError("Error deleting old lock file: " + e.getMessage());
+			e.printStackTrace();
 		}
 		
-		String portName = "/dev/ttyUSB0";
+		// Prepare portName: move ttyUSB* to ttyUSB0 for compability
+		Path portFile = Paths.get("/dev/ttyUSB0");
+		if(!Files.exists(portFile, LinkOption.NOFOLLOW_LINKS)) {
+			// /dev/ttyUSB0 does not exist. Try to find ttyUSB*
+			try (DirectoryStream<Path> files = Files.newDirectoryStream(Paths.get("/dev"), "ttyUSB*")) {
+			    for(Path file : files) {
+			    	Files.move(file, portFile);
+			    	logInfo("Moved " + file.toString() + " to " + portFile.toString());
+			    }
+			} catch(Exception e) {
+				logError("Error trying to find ttyUSB*: " + e.getMessage());
+				e.printStackTrace();
+			}
+		}
+
 		// default: DESS 
 		int baudRate = 9600;
 		int socAddress = 10143;
@@ -229,7 +259,7 @@ public class FEMSCore {
 			unit = 100;
 		}
 		SerialParameters params = new SerialParameters();
-		params.setPortName(portName);
+		params.setPortName(portFile.toAbsolutePath().toString());
 		params.setBaudRate(baudRate);
 		params.setDatabits(8);
 		params.setParity("None");
@@ -364,7 +394,6 @@ public class FEMSCore {
 	 * Initialize FEMS/FEMSmonitor system
 	 */
 	private static void init() {
-		Date startInitTimestamp = new Date();
 		int returnCode = 0; 
 		boolean dpkgIsRunning = false;
 		try {
@@ -507,13 +536,6 @@ public class FEMSCore {
 				logInfo("Do not start system update");
 			}
 			
-			// wait if we are to early and dpkg is not running
-			long initTime = new Date().getTime() - startInitTimestamp.getTime();
-			if(!dpkgIsRunning && TimeUnit.MILLISECONDS.toSeconds(initTime) < minimumInitSecs) {
-				logInfo("Too fast (" + TimeUnit.MILLISECONDS.toSeconds(initTime) + " secs) ... waiting");
-				Thread.sleep(TimeUnit.SECONDS.toMillis(minimumInitSecs) - initTime);
-			}
-			
 		} catch (Throwable e) { // Catch everything else
 			returnCode = 2;
 			StringWriter sw = new StringWriter();
@@ -526,25 +548,6 @@ public class FEMSCore {
 				handleReturnJson(returnJson);
 			} catch (Exception e1) {
 				logError(e1.getMessage());
-			}
-			// wait if we are to early
-			long initTime = new Date().getTime() - startInitTimestamp.getTime();
-			if(!dpkgIsRunning && TimeUnit.MILLISECONDS.toSeconds(initTime) < minimumInitSecs) {
-				logInfo("Too fast (" + TimeUnit.MILLISECONDS.toSeconds(initTime) + " secs) ... waiting");
-				try {
-					Thread.sleep(TimeUnit.SECONDS.toMillis(minimumInitSecs) - initTime);
-				} catch (InterruptedException e1) {
-					e1.printStackTrace(new PrintWriter(sw));
-					logError("Sleep error: " + sw.toString());
-					e1.printStackTrace();
-					returnJson = sendMessage(logText); // try to send log
-					try {
-						// start yaler if necessary
-						handleReturnJson(returnJson);
-					} catch (Exception e2) {
-						logError(e2.getMessage());
-					}
-				}
 			}
 		}
 		// Exit
@@ -591,4 +594,26 @@ public class FEMSCore {
 			e.printStackTrace();
 		}
 	}
+	
+	/** Set LCD-Text
+	 */
+	private static void setLcdText(String text) {
+		logInfo("LCD-Text: " + text);
+		FEMSIO femsIO = FEMSIO.getFEMSIO();
+		femsIO.writeAt(0, 0, text.substring(0, text.length() > 16 ? 16 : text.length()));
+		if(text.length() > 15) {
+			femsIO.writeAt(1, 0, text.substring(16, text.length() > 32 ? 32 : text.length()));
+		}
+	}
+	
+	/** Set LCD-Text
+	 */
+	private static void setLcdBrightness(int percent) {
+		logInfo("LCD-Brightness: " + percent + " %");
+		Board bbb = Platform.createBoard();
+		Pwm backlight = bbb.getPin(BBBNames.P9_22).as(Pwm.class);
+    	backlight.setFrequency(5000 /*5 kHz, as defined in org.openhab.binding.fems.internal.io.IOAnalogOutput */);
+    	backlight.setDuty(0.7); // turn light on
+    	backlight.enable();
+	}	
 }

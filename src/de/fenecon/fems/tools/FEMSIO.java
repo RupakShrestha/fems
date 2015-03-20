@@ -122,4 +122,8 @@ public class FEMSIO {
 		lcd.writeAt(row, column, text);
 		lcdLock.unlock();
 	}
+	
+	public void setLcdBacklight(int percent) {
+		backlight.setDuty(percent / 100.);
+	}
 }
