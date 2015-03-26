@@ -9,12 +9,9 @@
 package de.fenecon.fems;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedReader;
-import java.io.DataOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.Inet4Address;
@@ -33,9 +30,6 @@ import java.util.Calendar;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.Properties;
-import java.util.concurrent.TimeUnit;
-
-import javax.net.ssl.HttpsURLConnection;
 
 import net.wimpi.modbus.Modbus;
 import net.wimpi.modbus.ModbusException;
@@ -57,21 +51,25 @@ import org.bulldog.beagleboneblack.BBBNames;
 import org.bulldog.core.gpio.Pwm;
 import org.bulldog.core.platform.Board;
 import org.bulldog.core.platform.Platform;
-import org.json.JSONObject;
 
+import de.fenecon.fems.agents.OnlineMonitoring.OnlineMonitoringAgent;
+import de.fenecon.fems.agents.OnlineMonitoring.OnlineMonitoringCacheAgent;
 import de.fenecon.fems.exceptions.FEMSException;
-import de.fenecon.fems.exceptions.InternetException;
 import de.fenecon.fems.exceptions.IPException;
+import de.fenecon.fems.exceptions.InternetException;
 import de.fenecon.fems.exceptions.RS485Exception;
 import de.fenecon.fems.tools.FEMSIO;
 import de.fenecon.fems.tools.FEMSIO.UserLED;
 import de.fenecon.fems.tools.FEMSYaler;
 
 public class FEMSCore {
-	private final static SimpleDateFormat dateFormat = new SimpleDateFormat("dd.MM.yyyy");
-	private final static long minimumInitSecs = 180;
+	public final static OnlineMonitoringCacheAgent ONLINE_MONITORING_CACHE_AGENT = 
+		new OnlineMonitoringCacheAgent("Online-Monitoring Cache");
+	public final static OnlineMonitoringAgent ONLINE_MONITORING_AGENT = 
+		new OnlineMonitoringAgent("Online-Monitoring", ONLINE_MONITORING_CACHE_AGENT);
 	
-	private static String femsmonitorUrl;
+	private final static SimpleDateFormat dateFormat = new SimpleDateFormat("dd.MM.yyyy");
+	
 	private static String apikey;
 	private static String ess;
 	private static boolean debug;
@@ -87,7 +85,6 @@ public class FEMSCore {
 		} catch (IOException e) {
 			logError(e.getMessage());
 		}
-		femsmonitorUrl = properties.getProperty("url", "https://fenecon.de/femsmonitor");
 		apikey = properties.getProperty("apikey");
 		ess = properties.getProperty("ess", "dess");
 		debug = Boolean.parseBoolean(properties.getProperty("debug", "false"));
@@ -321,79 +318,9 @@ public class FEMSCore {
 	}
 	
 	/**
-	 * Send message to Online-Monitoring
-	 */
-	public static JSONObject sendMessage(String message) {
-		// create JSON		
-		JSONObject mainJson = new JSONObject();
-		mainJson.put("version", 1);
-		mainJson.put("apikey", apikey);
-		mainJson.put("timestamp", new Date().getTime());
-		mainJson.put("content", "system");
-		mainJson.put("system", message);
-		mainJson.put("ipv4", getIPaddress().getHostAddress()); // local ipv4 address
-		mainJson.put("yaler", FEMSYaler.getFEMSYaler().isActive());
-		// send to server
-		HttpsURLConnection con;
-		try {
-			URL url = new URL(femsmonitorUrl);
-			con = (HttpsURLConnection)url.openConnection();
-			con.setRequestMethod("POST");
-			con.setRequestProperty("Content-Type","application/json"); 
-			con.setRequestProperty("User-Agent", "Mozilla/4.0 (compatible; MSIE 5.0;Windows98;DigExt)"); 
-			con.setDoOutput(true); 
-			con.setDoInput(true);
-			DataOutputStream output = new DataOutputStream(con.getOutputStream());
-			try {
-				output.writeBytes(mainJson.toString());
-			} finally {
-				output.close();
-			}
-			// evaluate response
-			if(con.getResponseCode() == 200) {
-				logInfo("Successfully sent system-data; server answered: " + con.getResponseMessage());
-			} else {
-				logError("Error while sending system-data; server response: " + con.getResponseCode() + "; will try again later");
-			}
-			BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()));
-			JSONObject retJson = null;
-	        try {
-	            String inputLine = in.readLine();
-	            if(inputLine != null) {
-		        	try {
-		        		retJson = new JSONObject(inputLine);
-		        	} catch (Exception e) {}
-		        }
-	        } finally {
-	        	in.close();
-	        }
-	        return retJson;
-		} catch (IOException e) {
-			logError(e.getMessage());
-		}
-		return null;
-	}
-	
-	/**
-	 * Handle json returned from Online-Monitoring
-	 * @param json
-	 * @throws Exception 
-	 */
-	private static void handleReturnJson(JSONObject json) throws Exception {
-    	if(json != null && json.has("yaler")) {
-    		logInfo("Activate Yaler tunnel");
-    		String relayDomain = json.getString("yaler");
-    		FEMSYaler.getFEMSYaler().activateTunnel(relayDomain);
-    	} else {
-    		logInfo("Deactivate Yaler tunnel");
-    		FEMSYaler.getFEMSYaler().deactivateTunnel();
-    	}
-	} 
-	
-	/**
 	 * Initialize FEMS/FEMSmonitor system
 	 */
-	private static void init() {
+	private static void init() {	
 		int returnCode = 0; 
 		boolean dpkgIsRunning = false;
 		try {
@@ -513,14 +440,14 @@ public class FEMSCore {
 			// Send message
 			if(apikey == null) {
 				logError("Apikey is not available");
-			} else {		
-				JSONObject returnJson = sendMessage(logText);
-				try {
-					// start yaler if necessary
-					handleReturnJson(returnJson);
-				} catch (Exception e) {
-					logError(e.getMessage());
-				}
+			} else {
+				// start Agents
+				ONLINE_MONITORING_AGENT.setApikey(apikey);
+				ONLINE_MONITORING_AGENT.start();
+				ONLINE_MONITORING_CACHE_AGENT.setApikey(apikey);
+				ONLINE_MONITORING_CACHE_AGENT.start();
+				
+				ONLINE_MONITORING_AGENT.sendSystemMessage(logText);
 			}
 			
 			if(displayAgent.status.getInternet() && !dpkgIsRunning) {
@@ -542,14 +469,15 @@ public class FEMSCore {
 			e.printStackTrace(new PrintWriter(sw));
 			logError("Critical error: " + sw.toString());
 			e.printStackTrace();
-			JSONObject returnJson = sendMessage(logText); // try to send log
-			try {
-				// start yaler if necessary
-				handleReturnJson(returnJson);
-			} catch (Exception e1) {
-				logError(e1.getMessage());
-			}
+			ONLINE_MONITORING_AGENT.sendSystemMessage(logText); // try to send log
 		}
+
+		try {
+			Thread.sleep(2000);  // give the agents some time to try sending
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+		
 		// Exit
 		System.exit(returnCode);
 	}

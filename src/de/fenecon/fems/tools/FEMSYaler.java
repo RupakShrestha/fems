@@ -17,13 +17,15 @@ import java.nio.file.Paths;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import de.fenecon.fems.FEMSCore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class FEMSYaler {
 	private static final String serviceFileName = "fems-yalertunnel.service";
 	private static final Path serviceFile = Paths.get("/lib/systemd/system/", serviceFileName);
 	private static final Path systemctlExecutable = Paths.get("/bin/systemctl");
 	private static final Path yalerExecutable = Paths.get("/usr/bin/fems-yalertunnel");
+	private static Logger logger = LoggerFactory.getLogger(FEMSYaler.class);
 	
 	private static boolean serviceIsActive = false;
 	private static FEMSYaler femsYaler = null;
@@ -31,7 +33,7 @@ public class FEMSYaler {
     
 	public static FEMSYaler getFEMSYaler() {
     	if(femsYaler == null) {
-    		femsYaler = new FEMSYaler(); 
+    		femsYaler = new FEMSYaler();
     	}
     	return femsYaler;
     }
@@ -49,20 +51,25 @@ public class FEMSYaler {
 				serviceIsActive = false;
 			}
 		} catch (InterruptedException | IOException e) {
-			System.out.println("Status of yaler service is unknown: " + e.getMessage());
+			logger.warn("Status of yaler service is unknown: " + e.getMessage());
 		} finally {
 			systemctlLock.unlock();
 		}
-        System.out.println("Yaler service status is " + (serviceIsActive ? "online" : "offline"));	
+        logger.info("Yaler service status is " + (serviceIsActive ? "online" : "offline"));	
     }
 	
 	public boolean isActive() {
 		return serviceIsActive;
 	}
 	
-	public void activateTunnel(String relayDomain) throws Exception {
+	/** activate tunnel. Return true, if it was actually activated and was not already activated before
+	 * 
+	 * @param relayDomain
+	 * @throws Exception
+	 */
+	public boolean activateTunnel(String relayDomain) throws Exception {
 		/* do nothing if service is active */
-		if(serviceIsActive) { return; }
+		if(serviceIsActive) { return false; }
 		
 		/* check if relayDomain is consistent */
 		if(!relayDomain.matches("fenecon-\\w{4}-\\w{4}")) {
@@ -80,7 +87,7 @@ public class FEMSYaler {
 		try {
 			Files.deleteIfExists(serviceFile);
 		} catch (IOException e) {
-			System.out.println("Unable to deleteIfExists " + serviceFile + ": " + e.getMessage());
+			logger.info("Unable to deleteIfExists " + serviceFile + ": " + e.getMessage());
 		}
 		/* create unitFile */
 		String unitText = "[Unit]\n"
@@ -112,12 +119,20 @@ public class FEMSYaler {
         } 
         /* set as active */
         serviceIsActive = true;
-        FEMSCore.sendMessage("Yalertunnel is now activated");
+        logger.info("Yalertunnel is now activated");
+        
+        return true;
 	}
 	
-	public void deactivateTunnel() throws IOException, InterruptedException {
+	/** deactivate tunnel. Return true, if it was actually deactivated and was not already deactivated before
+	 * 
+	 * @return
+	 * @throws IOException
+	 * @throws InterruptedException
+	 */
+	public boolean deactivateTunnel() throws IOException, InterruptedException {
 		/* do nothing if service is not active */
-		if(!serviceIsActive) { return; }
+		if(!serviceIsActive) { return false; }
 		
 		/* stop service */
 		Runtime rt = Runtime.getRuntime();
@@ -127,7 +142,7 @@ public class FEMSYaler {
         int success = proc.waitFor();
         systemctlLock.unlock();
         if(success != 0) {
-        	System.out.println("Unable to stop yaler service");
+        	logger.info("Unable to stop yaler service");
         }
         /* disable service */
         rt = Runtime.getRuntime();
@@ -136,16 +151,18 @@ public class FEMSYaler {
         success = proc.waitFor();
         systemctlLock.unlock();
         if(success != 0) {
-        	System.out.println("Unable to disable yaler service");
+        	logger.info("Unable to disable yaler service");
         }
         /* delete service file */
 		try {
 			Files.deleteIfExists(serviceFile);
 		} catch (IOException e) {
-			System.out.println("Unable to deleteIfExists " + serviceFile + ": " + e.getMessage());
+			logger.info("Unable to deleteIfExists " + serviceFile + ": " + e.getMessage());
 		}
 		/* set as inactive */
 		serviceIsActive = false;
-		FEMSCore.sendMessage("Yalertunnel is now deactivated");
+		logger.info("Yalertunnel is now deactivated");
+	
+        return true;
 	}
 }

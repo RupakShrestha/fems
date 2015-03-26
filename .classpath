@@ -14,6 +14,18 @@
 			<attribute name="javadoc_location" value="jar:platform:/resource/FEMSCore/lib/commons-lang-2.6-javadoc.jar!/"/>
 		</attributes>
 	</classpathentry>
-	<classpathentry kind="lib" path="lib/json-20140107.jar"/>
+	<classpathentry kind="lib" path="lib/jsonrpc2-client-1.15.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="jar:platform:/resource/FEMSCore/lib/jsonrpc2-client-1.15-javadoc.jar!/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="lib/jsonrpc2-base-1.36.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="jar:platform:/resource/FEMSCore/lib/jsonrpc2-base-1.36-javadoc.jar!/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="lib/json-smart-1.2.jar"/>
+	<classpathentry kind="lib" path="lib/slf4j-simple-1.7.10.jar"/>
+	<classpathentry kind="lib" path="lib/slf4j-api-1.7.10.jar"/>
 	<classpathentry kind="output" path="bin"/>
 </classpath>
