@@ -22,7 +22,6 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
@@ -231,19 +230,17 @@ public class FEMSCore {
 			e.printStackTrace();
 		}
 		
-		// Prepare portName: move ttyUSB* to ttyUSB0 for compability
-		Path portFile = Paths.get("/dev/ttyUSB0");
-		if(!Files.exists(portFile, LinkOption.NOFOLLOW_LINKS)) {
-			// /dev/ttyUSB0 does not exist. Try to find ttyUSB*
-			try (DirectoryStream<Path> files = Files.newDirectoryStream(Paths.get("/dev"), "ttyUSB*")) {
-			    for(Path file : files) {
-			    	Files.move(file, portFile);
-			    	logInfo("Moved " + file.toString() + " to " + portFile.toString());
-			    }
-			} catch(Exception e) {
-				logError("Error trying to find ttyUSB*: " + e.getMessage());
-				e.printStackTrace();
-			}
+		// find first matching device
+		String modbusDevice = "ttyUSB*";
+		String portName = "/dev/ttyUSB0"; // if no file found: use default
+		try (DirectoryStream<Path> files = Files.newDirectoryStream(Paths.get("/dev"), modbusDevice)) {
+		    for(Path file : files) {
+		    	portName = file.toAbsolutePath().toString();
+		    	logInfo("Set modbus portname: " + portName);
+		    }
+		} catch(Exception e) {
+			logInfo("Error trying to find " + modbusDevice + ": " + e.getMessage());
+			e.printStackTrace();
 		}
 
 		// default: DESS 
@@ -256,7 +253,7 @@ public class FEMSCore {
 			unit = 100;
 		}
 		SerialParameters params = new SerialParameters();
-		params.setPortName(portFile.toAbsolutePath().toString());
+		params.setPortName(portName);
 		params.setBaudRate(baudRate);
 		params.setDatabits(8);
 		params.setParity("None");
